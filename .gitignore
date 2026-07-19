@@ -1,0 +1,58 @@
+# ⚠️ 安全 — 包含服务器密码，禁止上传
+CLAUDE.md
+agent.md
+
+# Claude Code 配置（本地工具，不属项目）
+.claude/
+Project/
+tmp/
+tmp_*.py
+
+# 数据集（太大，不含）
+data/
+.cache/
+autodl-pub/
+
+# 训练输出（模型权重 + 评估结果）
+training_output/
+output/
+output_*/
+
+# 模型文件
+*.safetensors
+*.bin
+*.pth
+*.pt
+
+# 临时文件
+tmp_*.py
+tmp_*.json
+/tmp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# 环境
+.env
+.venv
+env/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# MLLM 训练数据
+training_data/
