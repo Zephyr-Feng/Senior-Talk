@@ -16,9 +16,9 @@ class VADConfig:
 
 @dataclass
 class TranscriptionConfig:
-    model_size: str = "/root/autodl-tmp/.cache/modelscope/XXXXRT/faster-whisper/faster-whisper-tiny"
-    device: str = "cpu"
-    compute_type: str = "int8"
+    model_size: str = "/root/autodl-tmp/.cache/modelscope/XXXXRT/faster-whisper/faster-whisper-small"
+    device: str = "cuda"
+    compute_type: str = "float16"
     language: str = "zh"
     beam_size: int = 5
     vad_filter: bool = True
@@ -47,8 +47,8 @@ class SemanticConfig:
 @dataclass
 class MLLMConfig:
     """Configuration for MLLM review (Qwen2.5-VL via DashScope API or local model)"""
-    # --- API 模式 ---
-    api_key: str = "sk-ws-H.EDYYDRM.lhpH.MEUCIQC7vH67qTkHRJAdDgkh4tb8iuF_AO9432M6XBySZsrKkgIgPM9Y7vKd6ZKejCp3IcS487Ru4T1vTOY_dd4rRzk9o14"
+    # --- API 模式（Key 请通过环境变量 DASHSCOPE_API_KEY 注入，勿提交到仓库）---
+    api_key: str = ""
     model: str = "qwen2.5-vl-7b-instruct"    # API 模型名
     endpoint: str = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
     # --- 本地推理模式 ---

@@ -56,3 +56,9 @@ Thumbs.db
 
 # MLLM 训练数据
 training_data/
+
+# 审核音频（数据资产，不含）
+review_page/audio/
+
+# 一次性验证脚本
+verify_vl_inference.py
