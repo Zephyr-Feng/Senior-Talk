@@ -10,7 +10,9 @@ from transformers import (
 )
 from peft import PeftModel
 
-LIMIT = int(sys.argv[1]) if len(sys.argv) > 1 else 0  # 可选：只跑前 N 条（验证用）
+LIMIT = int(sys.argv[1]) if len(sys.argv) > 1 else 0        # 可选：只跑前 N 条（验证用）
+SHARD_ID = int(sys.argv[2]) if len(sys.argv) > 2 else 0      # 分片序号
+SHARD_TOTAL = int(sys.argv[3]) if len(sys.argv) > 3 else 1   # 分片总数（并行加速）
 
 # === 配置 ===
 MODEL_PATH = "/root/autodl-tmp/.cache/modelscope/qwen/Qwen2.5-VL-7B-Instruct"
@@ -20,7 +22,8 @@ EATD_DIR = os.path.join(BASE, "data/EATD-Corpus/EATD-Corpus")
 FEATURES_CSV = os.path.join(BASE, "output/eatd_analysis/all_features.csv")
 OUT_DIR = os.path.join(BASE, "training_output/eval_full")
 os.makedirs(OUT_DIR, exist_ok=True)
-OUT_JSONL = os.path.join(OUT_DIR, "eval_full.jsonl")
+OUT_JSONL = os.path.join(OUT_DIR, "eval_full_shard%d.jsonl" % SHARD_ID) if SHARD_TOTAL > 1 \
+    else os.path.join(OUT_DIR, "eval_full.jsonl")
 
 
 def acoustic_to_text(s):
@@ -95,15 +98,24 @@ with open(FEATURES_CSV) as f:
             "spectral_centroid": sf(row["spectral_centroid"]),
         })
 
-# 断点续跑：跳过已处理
+# 断点续跑：跳过已处理（兼容旧全量文件 + 本分片文件）
 if LIMIT:
     samples = samples[:LIMIT]
 done = set()
-if os.path.exists(OUT_JSONL):
-    for line in open(OUT_JSONL, encoding="utf-8"):
-        r = json.loads(line)
-        done.add((r["person_id"], r["emotion"]))
-pending = [s for s in samples if (s["person_id"], s["emotion"]) not in done]
+for cand in [os.path.join(OUT_DIR, "eval_full.jsonl"), OUT_JSONL]:
+    if os.path.exists(cand):
+        for line in open(cand, encoding="utf-8"):
+            r = json.loads(line)
+            done.add((r["person_id"], r["emotion"]))
+
+
+def in_shard(pid):
+    if SHARD_TOTAL <= 1:
+        return True
+    return int(pid.split("_")[1]) % SHARD_TOTAL == SHARD_ID
+
+
+pending = [s for s in samples if (s["person_id"], s["emotion"]) not in done and in_shard(s["person_id"])]
 print("总样本: %d, 已完成: %d, 待跑: %d" % (len(samples), len(done), len(pending)))
 
 # === 2. 加载模型 ===

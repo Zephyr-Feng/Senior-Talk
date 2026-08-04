@@ -38,16 +38,23 @@ def metrics(y_true, scores):
 p_aco = json.load(open(P_ACOUSTIC))["probabilities"]
 print("P_acoustic 样本: %d" % len(p_aco))
 
-# === 2. 加载 eval_full（LoRA 全量推理结果） ===
-if not os.path.exists(EVAL_FULL) or sum(1 for _ in open(EVAL_FULL, encoding="utf-8")) < 100:
-    print("⚠️ eval_full.jsonl 未完成或过少，当前 %d 条，等推理完成后重跑" %
-          sum(1 for _ in open(EVAL_FULL, encoding="utf-8")) if os.path.exists(EVAL_FULL) else 0)
+# === 2. 加载 eval_full（LoRA 全量推理结果，支持分片文件） ===
+EVAL_FILES = [EVAL_FULL] + [
+    os.path.join(os.path.dirname(EVAL_FULL), "eval_full_shard%d.jsonl" % i)
+    for i in range(8)
+]
+recs = {}
+for ef in EVAL_FILES:
+    if os.path.exists(ef):
+        for line in open(ef, encoding="utf-8"):
+            r = json.loads(line)
+            recs.setdefault("%s|%s" % (r["person_id"], r["emotion"]), r)
+if len(recs) < 100:
+    print("⚠️ eval_full 结果不足：当前 %d 条，等推理完成后重跑" % len(recs))
     raise SystemExit(1)
 
 rows = []
-for line in open(EVAL_FULL, encoding="utf-8"):
-    r = json.loads(line)
-    key = "%s|%s" % (r["person_id"], r["emotion"])
+for key, r in recs.items():
     if key not in p_aco:
         continue
     rows.append({
