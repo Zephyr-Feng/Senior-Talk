@@ -7,6 +7,7 @@
 """
 import json, os, csv, random, copy, re
 import numpy as np
+from loneliness_signal import detect_loneliness
 
 random.seed(42)
 np.random.seed(42)
@@ -91,6 +92,8 @@ print(f"有效样本: {len(samples)}")
 dep = sum(1 for s in samples if s["depressed"])
 norm = len(samples) - dep
 print(f"  抑郁: {dep}, 正常: {norm}")
+lonely_all = sum(1 for s in samples if detect_loneliness(s["text"])[0])
+print(f"  全量中带明显孤独信号: {lonely_all} 条（{lonely_all / len(samples):.1%}）")
 
 
 # === 2. 声学特征 → 文本描述 ===
@@ -224,9 +227,11 @@ def generate_reasoning_output(text, depressed, sds, features):
     """
     生成推理式诊断报告
     格式：分析 → 结论 → 建议
+    ★ 抑郁为主判断；语义孤独信号明显时，在分析/建议中提示"可能存在孤独"
     """
     categories, quotes = find_keywords(text)
     acoustic_items = generate_acoustic_analysis(features, depressed)
+    lonely_strong, lonely_dims, lonely_quotes = detect_loneliness(text)
 
     # === 文本分析 ===
     if depressed:
@@ -247,6 +252,11 @@ def generate_reasoning_output(text, depressed, sds, features):
             text_analysis += "，但程度较轻，不构成明显异常模式"
         else:
             text_analysis = "说话内容未检测到明显抑郁相关关键词，语义内容基本正常"
+
+    # 孤独信号明显时，在文本分析中补充孤独倾向提示（不改变抑郁主判断）
+    if lonely_strong:
+        lq = "、".join(f'"{q}"' for q in lonely_quotes)
+        text_analysis += f"。另外，说话内容明显体现孤独倾向（如{lq}），提示可能存在孤独情绪"
 
     # === 声学分析 ===
     acoustics_analysis = "；".join(acoustic_items)
@@ -275,15 +285,26 @@ def generate_reasoning_output(text, depressed, sds, features):
             suggestion = f"建议进一步评估PHQ-9量表（当前SDS={sds:.0f}），关注文本中提及的相关症状"
         else:
             suggestion = f"建议保持观察（SDS={sds:.0f}），注意情绪变化趋势"
+        if lonely_strong:
+            suggestion += "；建议同时关注其孤独情绪，可评估 ULS-8 量表"
     else:
-        if depressed_signs >= 3:
+        if lonely_strong:
+            # 抑郁为主判断：结论仍为"正常"，但孤独情绪明显需提示关注
+            if categories or depressed_signs >= 1:
+                assessment = "声学/文本特征存在部分异常但未达抑郁标准，说话内容明显体现孤独倾向，综合判断无抑郁倾向但需关注孤独情绪"
+            else:
+                assessment = "文本和声学特征未见明显抑郁信号，但说话内容明显体现孤独倾向，综合判断无抑郁倾向，需关注孤独情绪"
+            suggestion = "建议关注其孤独情绪，可鼓励增加社交互动（评估 ULS-8 量表）"
+        elif depressed_signs >= 3:
             assessment = f"虽声学特征有部分异常（{depressed_signs}/6项），但文本内容正常，综合判断为正常"
+            suggestion = "保持日常观察即可"
         elif depressed_signs >= 1:
             assessment = f"声学特征有轻微异常但文本内容正常，综合判断无抑郁倾向"
+            suggestion = "保持日常观察即可"
         else:
             assessment = "文本和声学特征均未见明显异常，综合判断为正常状态"
+            suggestion = "保持日常观察即可"
         conclusion = "正常"
-        suggestion = "保持日常观察即可"
 
     # 组装完整报告
     report = f"""分析：
@@ -316,7 +337,8 @@ def build_conversation(sample):
         "person_id": sample["person_id"],
         "emotion": sample["emotion"],
         "sds": sample["sds"],
-        "depressed": sample["depressed"]
+        "depressed": sample["depressed"],
+        "lonely_hint": detect_loneliness(sample["text"])[0],
     }
 
 
@@ -387,6 +409,8 @@ random.shuffle(train_samples)
 print(f"\n最终训练集: {len(train_samples)} 条")
 print(f"  抑郁: {sum(1 for s in train_samples if s['depressed'])}")
 print(f"  正常: {sum(1 for s in train_samples if not s['depressed'])}")
+lonely_hint = sum(1 for s in train_samples if detect_loneliness(s["text"])[0])
+print(f"  训练集中带孤独提示: {lonely_hint} 条（{lonely_hint / len(train_samples):.1%}）")
 
 
 # === 7. 保存 ===
