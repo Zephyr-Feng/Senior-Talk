@@ -65,3 +65,21 @@
   - `training_data_lonely/` 为 git 已提交（commit 50ce2c1）
 * **执行结果与验证状态**：语法检查通过 ✅；本地 300+300 生成 + 质检通过 ✅；尚未开卡（等待用户授权）
 * **置信度或遗留待办（TODO）**：开卡批次 = 上传数据+脚本 → `train_lora_lonely.py`（~5h）→ `eval_lonely_full.py heldout`（~30min）+ `eatd`（双分片 ~2h）→ 自动关机；孤独版训练/评估均无金标准，评估以 heldout + 误报率 + 人工抽查为准
+---
+### [2026-08-07] - 孤独 LoRA 开卡批次执行完成 + 解析 bug 修复
+
+* **当前操作动作**：开卡批次全流程执行（训练→评估→自动关机）+ 统计解析 bug 修复
+* **核心变更说明**：
+  1. 批次 12:01 启动：训练 340 步 × 7.4s ≈ 42min（12:43 完成，远快于预估 5h）→ heldout 评估 ~3min → EATD 双分片 ~10min → 12:53 汇总 → **自动关机**（13:03 连接确认）
+  2. 初判结果异常（EATD FP=478）→ 根因定位：**`"明显" in "不明显"` 子串匹配 bug**（Python 子串包含误判）→ 新增 `parse_lonely_pred()` 精确匹配（"明显"/"不明显"）
+  3. **修复后真实结果**：
+     - heldout（30+30）：TP=29 TN=30 FP=0 FN=1 → **Acc 98.3% / Sens 96.7% / Spec 100% / F1 98.3%**
+     - EATD 误报检查（479 条真实语料）：383/479 判"不明显" ✅，**误报 96/479（20%）**
+     - FN=1 为生成格式异常（输出截断 + `| assistant |` 重复，全批次共 3 条此类），非语义漏检
+  4. EATD 误报抽查分析：多数为抑郁语料负面人际表达（争吵/讨厌的人）被泛化为孤独信号——部分合理（人际疏离），少数幻觉（"不喜欢小孩子"→"被遗弃"）
+* **涉及/修改的文件清单**：
+  - `scripts/eval_lonely_full.py` (Modified)：新增 parse_lonely_pred 精确匹配 + 汇总从结论原文重解析
+  - `scripts/summarize_lonely.py` (Modified)：同上，兼容旧 jsonl 重算
+  - 服务器：`training_output/eval_lonely/{summary_eatd,summary_heldout}.json` (Recomputed)
+* **执行结果与验证状态**：本地重解析与服务器重跑结果一致 ✅（heldout 98.3% / EATD FP 96）；关机成功 ✅（13:03 连接拒绝，用户开卡后重连确认结果文件完整）
+* **置信度或遗留待办（TODO）**：EATD 20% 误报的阈值调优（负面情绪 vs 孤独的边界）；生成格式异常（3 条）根因待查（max_new_tokens/解码参数）；孤独模型评估无金标准，以 heldout + 误报率 + 人工抽查为准

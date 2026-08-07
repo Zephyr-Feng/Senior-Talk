@@ -7,7 +7,7 @@
 - 断点续跑：已评估的文本跳过
 - 用法: python eval_lonely_full.py heldout | eatd [shard_id shard_total]
 """
-import json, os, sys, csv, torch
+import json, os, sys, csv, zlib, torch
 from transformers import (
     Qwen2VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
 )
@@ -36,6 +36,17 @@ def extract_lonely_conclusion(response_text):
         if line.startswith("孤独倾向："):
             return line.replace("孤独倾向：", "").strip()
     return response_text  # fallback
+
+
+def parse_lonely_pred(conclusion):
+    # 精确匹配："不明显" 包含子串 "明显"，必须排除（2026-08-07 修复："明显" in "不明显" 为 True 导致全部误报）
+    c = conclusion.strip()
+    if c == "明显":
+        return True
+    if c == "不明显":
+        return False
+    # 容错：正常形式如"无明显孤独迹象"→ False；只有"明显"打头且非"不明显"才判正
+    return c.startswith("明显") and not c.startswith("不明显")
 
 
 # === 1. 准备评估样本 ===
@@ -68,7 +79,8 @@ else:
 def in_shard(key):
     if SHARD_TOTAL <= 1:
         return True
-    return int(abs(hash(key))) % SHARD_TOTAL == SHARD_ID  # 简单一致性分片
+    # crc32 跨进程稳定（hash() 有随机种子，分片会不一致）
+    return zlib.crc32(key.encode("utf-8")) % SHARD_TOTAL == SHARD_ID
 
 
 # 断点续跑
@@ -110,7 +122,7 @@ try:
             outputs = model.generate(**inputs, max_new_tokens=120, temperature=0.1, do_sample=False)
         response = processor.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
         conclusion = extract_lonely_conclusion(response)
-        pred_lonely = "明显" in conclusion
+        pred_lonely = parse_lonely_pred(conclusion)
 
         rec = {
             "key": s["key"], "text": s["text"],
@@ -129,6 +141,9 @@ finally:
 recs = []
 for line in open(OUT_JSONL, encoding="utf-8"):
     recs.append(json.loads(line))
+# 用结论原文重新解析（jsonl 中旧 pred_lonely 可能含子串匹配 bug）
+for r in recs:
+    r["pred_lonely"] = parse_lonely_pred(r.get("conclusion", r.get("predicted", "")))
 tp = sum(1 for r in recs if r["pred_lonely"] and r["lonely"])
 tn = sum(1 for r in recs if not r["pred_lonely"] and not r["lonely"])
 fp = sum(1 for r in recs if r["pred_lonely"] and not r["lonely"])
