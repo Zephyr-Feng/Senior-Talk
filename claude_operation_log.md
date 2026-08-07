@@ -48,3 +48,20 @@
 * **执行结果与验证状态**：融合实验完成 ✅；结果文件 16374B 确认存在后执行 `shutdown now` ✅；3 秒后重连 Connection refused 验证关机成功 ✅
 * **置信度或遗留待办（TODO）**：声学无增量的根因待分析（时序特征/eGeMAPS/DAIC-WOZ 可能改善）；融合未提升的结论需在报告中如实呈现
 ---
+### [2026-08-07] - 孤独倾向 LoRA 训练链路搭建（本地，未开卡）
+
+* **当前操作动作**：合成孤独数据生成器 + 训练/评估脚本（纯本地工作，零 GPU 成本）
+* **核心变更说明**：
+  1. `gen_lonely_samples.py`：模板注入法合成孤独样本（ULS-8 六维度覆盖），标签随生成已知（无需 AI 标注）
+  2. 全量生成 300 正 + 300 负 = 600 条，质检通过：负样本误报 0 条（硬性检查，>0 报错退出）、文本唯一率 100%、六维度分布均衡（88~113）、长度 11-72 字
+  3. 抽查未通过规则识别的 105 条正样本：全部为高质量含蓄表达（"想说点心里话，翻翻手机也不知道发给谁"等），标签正确——恰是规则引擎盲区，训练 MLLM 语义判断的价值点
+  4. `train_lora_lonely.py`：QLoRA 4bit + r16/alpha32（与抑郁版同配置），600→540 条训练（分层留出 30+30 验证集 → holdout.jsonl）
+  5. `eval_lonely_full.py`：双评估集（heldout 60 条主评估 + EATD 479 条误报检查），断点续跑 + 分片支持
+* **涉及/修改的文件清单**：
+  - `scripts/gen_lonely_samples.py` (Created)
+  - `scripts/train_lora_lonely.py` (Created)
+  - `scripts/eval_lonely_full.py` (Created)
+  - `training_data_lonely/lonely_samples.jsonl` (Created, 600 条) + `quality_report.txt`
+  - `training_data_lonely/` 为 git 已提交（commit 50ce2c1）
+* **执行结果与验证状态**：语法检查通过 ✅；本地 300+300 生成 + 质检通过 ✅；尚未开卡（等待用户授权）
+* **置信度或遗留待办（TODO）**：开卡批次 = 上传数据+脚本 → `train_lora_lonely.py`（~5h）→ `eval_lonely_full.py heldout`（~30min）+ `eatd`（双分片 ~2h）→ 自动关机；孤独版训练/评估均无金标准，评估以 heldout + 误报率 + 人工抽查为准
