@@ -7,6 +7,7 @@ Three modes:
 """
 import json
 import logging
+import re
 from typing import Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
@@ -26,6 +27,14 @@ class MLLMReviewer:
         self._model = None
         self._processor = None
         self._model_loaded = False
+
+    def _parse_json_response(self, text: str) -> Any:
+        """Parse model response as JSON, stripping markdown code fences (```json ... ```)."""
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        return json.loads(text)
 
     def _build_prompt(self, daily_output: Dict[str, Any]) -> str:
         """Build the prompt for Qwen2.5-VL from pipeline output"""
@@ -338,11 +347,13 @@ class MLLMReviewer:
             response = self._call_local_model(prompt)
             if response:
                 try:
-                    review_result = json.loads(response)
+                    review_result = self._parse_json_response(response)
                     logger.info("Local MLLM review successful")
                 except json.JSONDecodeError:
                     logger.warning(f"Local model response not valid JSON: {response[:100]}")
                     review_result = {"raw_response": response}
+                else:
+                    review_result["mode"] = "local"
             else:
                 logger.warning("Local model inference failed, falling back")
 
@@ -353,11 +364,13 @@ class MLLMReviewer:
             response = self._call_api(prompt)
             if response:
                 try:
-                    review_result = json.loads(response)
+                    review_result = self._parse_json_response(response)
                     logger.info("MLLM API review successful")
                 except json.JSONDecodeError:
                     logger.warning(f"MLLM response not valid JSON, using raw: {response[:100]}")
                     review_result = {"raw_response": response}
+                else:
+                    review_result["mode"] = "api"
 
         # Mode 3: Simulated
         if review_result is None:
