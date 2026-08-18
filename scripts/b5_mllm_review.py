@@ -27,6 +27,7 @@ class MLLMReviewer:
         self._model = None
         self._processor = None
         self._model_loaded = False
+        self._is_lora = False
 
     def _parse_json_response(self, text: str) -> Any:
         """Parse model response as JSON, stripping markdown code fences (```json ... ```)."""
@@ -149,22 +150,49 @@ class MLLMReviewer:
             return None
 
     def _load_local_model(self):
-        """Lazy-load Qwen2.5-VL model from local path"""
+        """Lazy-load Qwen2.5-VL model from local path.
+
+        When lora_adapter_path is configured, loads the LoRA fine-tuned
+        reasoning-report version (4-bit quantized base + adapter).
+        """
         if self._model_loaded:
             return True
         try:
             from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
             model_path = self.config.local_model_path
-            logger.info(f"Loading local Qwen2.5-VL from {model_path}...")
-            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype=dtype,
-                device_map="auto",
-            )
-            self._processor = AutoProcessor.from_pretrained(model_path)
+            lora_path = self.config.lora_adapter_path
+
+            if lora_path:
+                from peft import PeftModel
+                from transformers import BitsAndBytesConfig
+                logger.info(f"Loading base Qwen2.5-VL + LoRA adapter from {lora_path}...")
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_use_double_quant=True,
+                )
+                base_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                    model_path,
+                    quantization_config=bnb_config,
+                    device_map="auto",
+                )
+                self._model = PeftModel.from_pretrained(base_model, lora_path)
+                self._processor = AutoProcessor.from_pretrained(lora_path)
+                self._is_lora = True
+                logger.info(f"LoRA model loaded OK (device={self._model.device})")
+            else:
+                logger.info(f"Loading local Qwen2.5-VL from {model_path}...")
+                dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+                self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                    model_path,
+                    torch_dtype=dtype,
+                    device_map="auto",
+                )
+                self._processor = AutoProcessor.from_pretrained(model_path)
+                self._is_lora = False
+                logger.info(f"Local model loaded OK (device={self._model.device})")
             self._model_loaded = True
-            logger.info(f"Local model loaded OK (device={self._model.device})")
             return True
         except Exception as e:
             logger.error(f"Failed to load local model: {e}")
@@ -204,6 +232,150 @@ class MLLMReviewer:
         except Exception as e:
             logger.error(f"Local inference failed: {e}")
             return None
+
+    # --- LoRA 推理式报告版 ---
+
+    def _features_to_text(self, daily_output: Dict[str, Any]) -> str:
+        """Convert acoustic features to natural language description
+        (same style as prepare_training_data.acoustic_to_text, keeping the
+        LoRA model's training distribution)."""
+        f = daily_output
+        parts = []
+
+        sr = f.get("speech_rate", 0)
+        if sr < 2.5:
+            parts.append(f"语速很慢（{sr:.1f}字/秒）")
+        elif sr < 4.0:
+            parts.append(f"语速偏慢（{sr:.1f}字/秒）")
+        elif sr < 5.5:
+            parts.append(f"语速正常（{sr:.1f}字/秒）")
+        else:
+            parts.append(f"语速偏快（{sr:.1f}字/秒）")
+
+        pr = f.get("pause_ratio", 0)
+        if pr < 0.2:
+            parts.append("停顿很少")
+        elif pr < 0.4:
+            parts.append("停顿略多")
+        elif pr < 0.6:
+            parts.append("停顿较多")
+        else:
+            parts.append("停顿非常多")
+
+        pv = f.get("pitch_variability", 0)
+        if pv < 20:
+            parts.append("音调变化小，语调平淡")
+        elif pv < 40:
+            parts.append("音调变化正常")
+        elif pv < 60:
+            parts.append("音调变化较大，情绪有一定波动")
+        else:
+            parts.append("音调变化显著，情绪起伏明显")
+
+        ev = f.get("energy_variability", 0)
+        if ev < 0.02:
+            parts.append("发声能量极低，说话无力")
+        elif ev < 0.05:
+            parts.append("发声能量偏低，可能精力不足")
+        elif ev < 0.08:
+            parts.append("发声能量正常")
+        else:
+            parts.append("发声能量充足")
+
+        jit = f.get("jitter", 0)
+        if jit and jit < 0.015:
+            parts.append("嗓音较稳定")
+        elif jit and jit < 0.03:
+            parts.append("嗓音稳定性一般")
+        else:
+            parts.append("嗓音稳定性较差")
+
+        sh = f.get("shimmer", 0)
+        if sh and sh < 0.03:
+            parts.append("音质干净")
+        elif sh and sh < 0.06:
+            parts.append("音质一般")
+        else:
+            parts.append("音质较嘈杂")
+
+        return "，".join(parts)
+
+    def _call_lora_model(self, daily_output: Dict[str, Any]) -> Optional[str]:
+        """Run inference with the LoRA reasoning-report model."""
+        if not self._load_local_model():
+            return None
+        try:
+            system_msg = ("你是一个专业的心理健康评估助手。请根据对方的语音声学特征和"
+                          "说话内容进行综合分析，输出推理式诊断报告。注意引用具体的说话"
+                          "内容和声学数值作为依据。")
+            user_msg = "【声学特征】%s\n【说话内容】%s" % (
+                self._features_to_text(daily_output),
+                daily_output.get("full_text", ""),
+            )
+            conversation = [
+                {"role": "system", "content": [{"type": "text", "text": system_msg}]},
+                {"role": "user", "content": [{"type": "text", "text": user_msg}]},
+            ]
+            text = self._processor.apply_chat_template(
+                conversation, tokenize=False, add_generation_prompt=True
+            )
+            inputs = self._processor(text=text, return_tensors="pt", padding=True)
+            inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+
+            with torch.no_grad():
+                outputs = self._model.generate(
+                    **inputs,
+                    max_new_tokens=200,  # 推理式输出较长
+                    temperature=0.1,
+                    do_sample=False,
+                    pad_token_id=self._processor.tokenizer.pad_token_id,
+                )
+            input_len = inputs["input_ids"].shape[1]
+            response = self._processor.decode(
+                outputs[0][input_len:],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            ).strip()
+            return response
+        except Exception as e:
+            logger.error(f"LoRA inference failed: {e}")
+            return None
+
+    def _parse_lora_report(self, response: str) -> Dict[str, Any]:
+        """Parse the reasoning-report format (分析/结论/建议) into structured fields."""
+        result: Dict[str, Any] = {}
+
+        # 结论行 → overall_assessment
+        conclusion = ""
+        for line in response.split("\n"):
+            if line.strip().startswith("结论："):
+                conclusion = line.replace("结论：", "").strip()
+                break
+        if "关注" in conclusion or "异常" in conclusion or "抑郁" in conclusion:
+            result["overall_assessment"] = "关注"
+        elif "正常" in conclusion:
+            result["overall_assessment"] = "正常"
+        else:
+            result["overall_assessment"] = conclusion or "正常"
+
+        # 建议行 → recommendation
+        rec = ""
+        for line in response.split("\n"):
+            if line.strip().startswith("建议："):
+                rec = line.replace("建议：", "").strip()
+                break
+        result["recommendation"] = rec
+
+        # 分析段落（"分析"到"结论"之间）→ summary（综合判断）
+        m = re.search(r"分析[:：](.*?)(?:\n\s*结论[:：]|$)", response, re.S)
+        if m:
+            result["summary"] = m.group(1).strip()
+        else:
+            result["summary"] = conclusion or response[:100]
+
+        result["report"] = response          # 完整推理式报告原文
+        result["mode"] = "lora"
+        return result
 
     def _generate_simulated_review(self, daily_output: Dict[str, Any]) -> Dict[str, str]:
         """Generate rule-based review when API is unavailable"""
@@ -340,22 +512,31 @@ class MLLMReviewer:
 
         review_result = None
 
-        # Mode 1: Local model
+        # Mode 1: Local model (LoRA reasoning-report version if configured)
         if self.config.use_local:
-            logger.info("Using local Qwen2.5-VL model...")
-            prompt = self._build_prompt(daily_output)
-            response = self._call_local_model(prompt)
-            if response:
-                try:
-                    review_result = self._parse_json_response(response)
-                    logger.info("Local MLLM review successful")
-                except json.JSONDecodeError:
-                    logger.warning(f"Local model response not valid JSON: {response[:100]}")
-                    review_result = {"raw_response": response}
+            if self.config.lora_adapter_path:
+                logger.info("Using local Qwen2.5-VL + LoRA (reasoning-report version)...")
+                response = self._call_lora_model(daily_output)
+                if response:
+                    review_result = self._parse_lora_report(response)
+                    logger.info("LoRA MLLM review successful")
                 else:
-                    review_result["mode"] = "local"
+                    logger.warning("LoRA model inference failed, falling back")
             else:
-                logger.warning("Local model inference failed, falling back")
+                logger.info("Using local Qwen2.5-VL (zero-shot)...")
+                prompt = self._build_prompt(daily_output)
+                response = self._call_local_model(prompt)
+                if response:
+                    try:
+                        review_result = self._parse_json_response(response)
+                        logger.info("Local MLLM review successful")
+                    except json.JSONDecodeError:
+                        logger.warning(f"Local model response not valid JSON: {response[:100]}")
+                        review_result = {"raw_response": response}
+                    else:
+                        review_result["mode"] = "local"
+                else:
+                    logger.warning("Local model inference failed, falling back")
 
         # Mode 2: API
         if review_result is None and self.config.enable_review and self.config.api_key:

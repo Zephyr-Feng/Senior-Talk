@@ -54,6 +54,8 @@ class MLLMConfig:
     # --- 本地推理模式 ---
     use_local: bool = True                    # True = 加载本地 Qwen2.5-VL 推理
     local_model_path: str = "/root/autodl-tmp/.cache/modelscope/qwen/Qwen2.5-VL-7B-Instruct"
+    # LoRA 微调 adapter 路径（推理式报告版）。为空字符串 = 零样本模式（用原始模型）
+    lora_adapter_path: str = "/root/autodl-tmp/senior_project/training_output/lora_adapter_dep_v1"
     # --- 通用参数 ---
     max_tokens: int = 1024
     temperature: float = 0.3
