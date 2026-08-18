@@ -280,11 +280,11 @@ def generate_reasoning_output(text, depressed, sds, features):
             assessment = "声学特征正常但基于标签综合判断需关注"
         conclusion = "需要关注"
         if depressed_signs >= 3:
-            suggestion = f"建议进一步评估PHQ-9量表（当前SDS={sds:.0f}），重点关注情绪状态和睡眠情况，建议心理科随访"
+            suggestion = "建议进一步评估PHQ-9量表，重点关注情绪状态和睡眠情况，建议心理科随访"
         elif len(categories) > 0:
-            suggestion = f"建议进一步评估PHQ-9量表（当前SDS={sds:.0f}），关注文本中提及的相关症状"
+            suggestion = "建议进一步评估PHQ-9量表，关注文本中提及的相关症状"
         else:
-            suggestion = f"建议保持观察（SDS={sds:.0f}），注意情绪变化趋势"
+            suggestion = "建议保持观察，注意情绪变化趋势"
         if lonely_strong:
             suggestion += "；建议同时关注其孤独情绪，可评估 ULS-8 量表"
     else:
